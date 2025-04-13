@@ -1,0 +1,171 @@
+
+services:
+
+  airflow-webserver:
+    container_name: airflow-webserver
+    image: apache/airflow:latest
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://$AIRFLOW_POSTGRES_USERNAME:$AIRFLOW_POSTGRES_PASSWORD@airflow-postgres:5432/$AIRFLOW_POSTGRES_DB
+      - AIRFLOW__WEBSERVER__SECRET_KEY=$AIRFLOW_WEBSERVER_SECRET_KEY
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+      - _PIP_ADDITIONAL_REQUIREMENTS=${_PIP_ADDITIONAL_REQUIREMENTS:- apache-airflow-providers-apache-kafka}
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
+    volumes:
+      - ./airflow-dags:/opt/airflow/dags
+    ports:
+      - $AIRFLOW_WEBSERVER_PORT:8080
+    command: >
+      bash -c "
+        airflow db init &&
+        if ! airflow users list | grep -q $AIRFLOW_USERNAME; then
+          airflow users create --username $AIRFLOW_USERNAME --firstname Admin --lastname User --role Admin --email admin@example.com --password $AIRFLOW_PASSWORD
+        fi &&
+        airflow webserver
+      "
+    depends_on:
+      - airflow-postgres
+      - airflow-scheduler
+      - airflow-redis
+      - kafka-broker
+
+  airflow-scheduler:
+    container_name: airflow-scheduler
+    image: apache/airflow:latest
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://$AIRFLOW_POSTGRES_USERNAME:$AIRFLOW_POSTGRES_PASSWORD@airflow-postgres:5432/$AIRFLOW_POSTGRES_DB
+      - AIRFLOW__WEBSERVER__SECRET_KEY=$AIRFLOW_WEBSERVER_SECRET_KEY
+      - _PIP_ADDITIONAL_REQUIREMENTS=${_PIP_ADDITIONAL_REQUIREMENTS:- apache-airflow-providers-apache-kafka}
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
+    volumes:
+      - ./airflow-dags:/opt/airflow/dags
+    command: airflow scheduler
+    depends_on:
+      - airflow-postgres
+
+  airflow-postgres:
+    container_name: airflow-postgres
+    image: postgres:latest
+    environment:
+      - POSTGRES_USER=$AIRFLOW_POSTGRES_USERNAME
+      - POSTGRES_PASSWORD=$AIRFLOW_POSTGRES_PASSWORD
+      - POSTGRES_DB=$AIRFLOW_POSTGRES_DB
+
+  airflow-redis:
+    container_name: airflow-redis
+    image: redis:latest
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+
+  kafka-broker:
+    image: confluentinc/cp-kafka:7.3.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+
+  kafka-console:
+    container_name: kafka-console
+    image: redpandadata/console:latest
+    ports:
+      - $KAFKA_CONSOLE_PORT:8080
+    environment:
+      - KAFKA_BROKERS=kafka-broker:29092
+    depends_on:
+      - kafka-broker
+      
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.3.0
+    depends_on:
+      - kafka-broker
+      - postgres
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka-broker:9092
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: kafka-connect-group
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_PLUGIN_PATH: /usr/share/java,/etc/kafka-connect/jars
+    healthcheck:
+      test: curl -f http://kafka-connect:8083 | grep -q 'kafka_cluster_id' || exit 1
+    volumes:
+      - ./connect-plugins:/etc/kafka-connect/jars
+      - ./kafka-connect-setup:/kafka-connect-setup
+    command: >
+      bash -c "
+        /etc/confluent/docker/run &
+        sleep 10 && 
+        curl -X POST http://localhost:8083/connectors -H 'Content-Type: application/json' -d @/kafka-connect-setup/postgres-sink.json && 
+        wait
+      "
+
+  kafka-connect-ui:
+    image: landoop/kafka-connect-ui:latest
+    container_name: kafka-connect-ui
+    environment:
+      CONNECT_URL: http://kafka-connect:8083
+    ports:
+      - $KAFKA_CONNECT_UI_PORT:8000
+    depends_on:
+      - kafka-connect
+
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: siem
+    ports:
+      - "5432:5433"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  flink-job:
+    build: ./flink
+    depends_on:
+      - kafka-broker
+    restart: always
+
+  superset:
+    image: apache/superset
+    container_name: superset
+    ports:
+      - "8088:8088"
+    depends_on:
+      - postgres
+    environment:
+      SUPERSET_DATABASE_URI: postgresql+psycopg2://airflow:airflow@postgres:5433/siem
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset-setup:/app/superset-setup
+    command: >
+      /bin/bash -c "
+        cp /app/superset-setup/superset_config.py /app/pythonpath/superset_config.py && 
+        chmod +x /app/superset-setup/init_superset.sh && 
+        /app/superset-setup/init_superset.sh
+      "
+
+volumes:
+  pgdata:
+  superset_home:
