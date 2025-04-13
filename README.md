@@ -31,7 +31,7 @@ A fully automated real-time SIEM (Security Information & Event Management) stack
 
 ```
 .
-├── dags/                          # Airflow DAG for generating events
+├── airflow-dags/                          # Airflow DAG for generating events
 ├── superset-setup/               # Superset init scripts + dashboards
 │   ├── dashboards/
 │   │   ├── security_alerts.json
