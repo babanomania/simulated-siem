@@ -127,7 +127,7 @@ A fully automated real-time SIEM (Security Information & Event Management) stack
 
 Superset will automatically include:
 - 📈 Time-series chart of alerts per hour
-- 🔍 Queryable `security_alerts` dataset
+- 🔍 Queryable `alerts_security` dataset
 
 ---
 
