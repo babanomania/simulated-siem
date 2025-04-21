@@ -43,7 +43,8 @@ A fully automated real-time SIEM (Security Information & Event Management) stack
 ├── kafka-connect-setup/                   # Kafka Connect configuration
 │   └── postgres-sink.json                 # PostgreSQL sink connector config
 ├── superset-setup/                        # Superset initialization
-│   ├── dashboards/                        # Pre-configured dashboards
+│   ├── siem_dashboards.zip                # Pre-configured SIEM alerts dashboard
+│   ├── siem_datasources.zip               # Pre-configured SIEM alerts datasource
 │   ├── init_superset.sh                   # Initialization script
 │   └── superset_config.py                 # Superset configuration
 ├── .env                                   # Environment variables
