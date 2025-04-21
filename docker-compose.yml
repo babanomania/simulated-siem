@@ -1,49 +1,104 @@
-
 services:
+
+  kafka-zookeeper:
+    container_name: kafka-zookeeper
+    image: confluentinc/cp-zookeeper:7.3.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka-broker:
+    container_name: kafka-broker
+    image: confluentinc/cp-kafka:7.3.0
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: kafka-zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    depends_on:
+      - kafka-zookeeper
+
+  kafka-init:
+    container_name: kafka-init
+    image: confluentinc/cp-kafka:7.3.0
+    entrypoint: [ '/bin/sh', '-c' ]
+    command: |
+      "
+      # blocks until kafka is reachable
+      kafka-topics --bootstrap-server kafka-broker:29092 --list
+
+      echo -e 'Creating kafka topics'
+      kafka-topics --bootstrap-server kafka-broker:29092 --create --if-not-exists --topic $KAFKA_TOPIC_NETWORK --replication-factor 1 --partitions 1
+
+      kafka-topics --bootstrap-server kafka-broker:29092 --create --if-not-exists --topic $KAFKA_TOPIC_ALERTS --replication-factor 1 --partitions 1
+    
+      echo -e 'Successfully created the following topics:'
+      kafka-topics --bootstrap-server kafka-broker:29092 --list
+      "
+    depends_on:
+      - kafka-broker
+
+  kafka-console:
+    container_name: kafka-console
+    image: redpandadata/console:latest
+    environment:
+      - KAFKA_BROKERS=kafka-broker:29092
+    ports:
+      - $KAFKA_CONSOLE_PORT:8080
+    depends_on:
+      - kafka-init
+      - kafka-broker
 
   airflow-webserver:
     container_name: airflow-webserver
     image: apache/airflow:latest
     environment:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://$AIRFLOW_POSTGRES_USERNAME:$AIRFLOW_POSTGRES_PASSWORD@airflow-postgres:5432/$AIRFLOW_POSTGRES_DB
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://$AIRFLOW_POSTGRES_USERNAME:$AIRFLOW_POSTGRES_PASSWORD@airflow-postgres:5432/$AIRFLOW_POSTGRES_DB
       - AIRFLOW__WEBSERVER__SECRET_KEY=$AIRFLOW_WEBSERVER_SECRET_KEY
       - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
-      - _PIP_ADDITIONAL_REQUIREMENTS=${_PIP_ADDITIONAL_REQUIREMENTS:- apache-airflow-providers-apache-kafka}
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@airflow-redis:6379/0
+      - _PIP_ADDITIONAL_REQUIREMENTS=${_PIP_ADDITIONAL_REQUIREMENTS:- faker apache-airflow-providers-apache-kafka}
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=False
     volumes:
       - ./airflow-dags:/opt/airflow/dags
     ports:
       - $AIRFLOW_WEBSERVER_PORT:8080
-    command: >
-      bash -c "
-        airflow db init &&
-        if ! airflow users list | grep -q $AIRFLOW_USERNAME; then
-          airflow users create --username $AIRFLOW_USERNAME --firstname Admin --lastname User --role Admin --email admin@example.com --password $AIRFLOW_PASSWORD
-        fi &&
-        airflow webserver
-      "
+    command: airflow webserver
     depends_on:
       - airflow-postgres
       - airflow-scheduler
       - airflow-redis
       - kafka-broker
+      - kafka-init
 
   airflow-scheduler:
     container_name: airflow-scheduler
     image: apache/airflow:latest
     environment:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://$AIRFLOW_POSTGRES_USERNAME:$AIRFLOW_POSTGRES_PASSWORD@airflow-postgres:5432/$AIRFLOW_POSTGRES_DB
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://$AIRFLOW_POSTGRES_USERNAME:$AIRFLOW_POSTGRES_PASSWORD@airflow-postgres:5432/$AIRFLOW_POSTGRES_DB
       - AIRFLOW__WEBSERVER__SECRET_KEY=$AIRFLOW_WEBSERVER_SECRET_KEY
-      - _PIP_ADDITIONAL_REQUIREMENTS=${_PIP_ADDITIONAL_REQUIREMENTS:- apache-airflow-providers-apache-kafka}
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
+      - _PIP_ADDITIONAL_REQUIREMENTS=${_PIP_ADDITIONAL_REQUIREMENTS:- faker apache-airflow-providers-apache-kafka}
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=False
     volumes:
       - ./airflow-dags:/opt/airflow/dags
-    command: airflow scheduler
+    command: >
+      bash -c "
+        airflow db init &&
+        if ! airflow users list | grep -q $AIRFLOW_USERNAME; then
+          airflow users create --username $AIRFLOW_USERNAME --firstname Admin --lastname User --role Admin --email admin@example.com --password $AIRFLOW_PASSWORD
+        fi &&
+        airflow scheduler
+      "
     depends_on:
       - airflow-postgres
+      - kafka-broker
+      - kafka-init
 
   airflow-postgres:
     container_name: airflow-postgres
@@ -52,50 +107,27 @@ services:
       - POSTGRES_USER=$AIRFLOW_POSTGRES_USERNAME
       - POSTGRES_PASSWORD=$AIRFLOW_POSTGRES_PASSWORD
       - POSTGRES_DB=$AIRFLOW_POSTGRES_DB
+    volumes:
+      - airflow-pg-data:/var/lib/postgresql/data
+    depends_on:
+      - airflow-redis
+      - kafka-broker
+      - kafka-init
 
   airflow-redis:
-    container_name: airflow-redis
     image: redis:latest
-
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.3.0
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-    ports:
-      - "2181:2181"
-
-  kafka-broker:
-    image: confluentinc/cp-kafka:7.3.0
-    depends_on:
-      - zookeeper
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENERS: PLAINTEXT://:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    ports:
-      - "9092:9092"
-
-  kafka-console:
-    container_name: kafka-console
-    image: redpandadata/console:latest
-    ports:
-      - $KAFKA_CONSOLE_PORT:8080
-    environment:
-      - KAFKA_BROKERS=kafka-broker:29092
+    container_name: airflow-redis
+    volumes:
+      - airflow-redis-data:/data
     depends_on:
       - kafka-broker
-      
+      - kafka-init
+
   kafka-connect:
     image: confluentinc/cp-kafka-connect:7.3.0
-    depends_on:
-      - kafka-broker
-      - postgres
-    ports:
-      - "8083:8083"
+    container_name: kafka-connect
     environment:
-      CONNECT_BOOTSTRAP_SERVERS: kafka-broker:9092
+      CONNECT_BOOTSTRAP_SERVERS: kafka-broker:29092
       CONNECT_REST_PORT: 8083
       CONNECT_GROUP_ID: kafka-connect-group
       CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
@@ -107,15 +139,26 @@ services:
       CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
       CONNECT_PLUGIN_PATH: /usr/share/java,/etc/kafka-connect/jars
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
     healthcheck:
       test: curl -f http://kafka-connect:8083 | grep -q 'kafka_cluster_id' || exit 1
+    ports:
+      - 8083:8083
     volumes:
       - ./connect-plugins:/etc/kafka-connect/jars
       - ./kafka-connect-setup:/kafka-connect-setup
+    depends_on:
+      - kafka-broker
+      - sink-postgres
     command: >
       bash -c "
+        echo 'Installing JDBC connector plugin...' &&
+        cd /etc/kafka-connect/jars &&
+        curl -O https://packages.confluent.io/maven/io/confluent/kafka-connect-jdbc/10.7.4/kafka-connect-jdbc-10.7.4.jar &&
         /etc/confluent/docker/run &
-        sleep 10 && 
+        sleep 30 && 
         curl -X POST http://localhost:8083/connectors -H 'Content-Type: application/json' -d @/kafka-connect-setup/postgres-sink.json && 
         wait
       "
@@ -130,42 +173,118 @@ services:
     depends_on:
       - kafka-connect
 
-  postgres:
-    image: postgres:14
+  sink-postgres:
+    image: postgres:latest
+    container_name: sink-postgres
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: siem
-    ports:
-      - "5432:5433"
+      - POSTGRES_USER=$SINK_POSTGRES_USERNAME
+      - POSTGRES_PASSWORD=$SINK_POSTGRES_PASSWORD
+      - POSTGRES_DB=$SINK_POSTGRES_DB
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - sink-pg-data:/var/lib/postgresql/data
 
-  flink-job:
-    build: ./flink
+  flink-jobmanager:
+    image: flink:1.17.1-java11
+    container_name: flink-jobmanager
+    ports:
+      - $FLINK_PORT:8081
+    environment:
+      - KAFKA_TOPIC_NETWORK=${KAFKA_TOPIC_NETWORK}
+      - KAFKA_TOPIC_ALERTS=${KAFKA_TOPIC_ALERTS}
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        jobmanager.rpc.port: 6123
+        rest.port: 8081
+        state.backend: filesystem
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        heartbeat.interval: 1000
+        heartbeat.timeout: 5000
+    volumes:
+      - ./flink-jobs/target:/opt/flink/jobs
+      - flink-checkpoints:/tmp/flink-checkpoints
+    command: jobmanager
+
+  flink-taskmanager:
+    image: flink:1.17.1-java11
+    container_name: flink-taskmanager
     depends_on:
+      - flink-jobmanager
+    environment:
+      - KAFKA_TOPIC_NETWORK=${KAFKA_TOPIC_NETWORK}
+      - KAFKA_TOPIC_ALERTS=${KAFKA_TOPIC_ALERTS}
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        state.backend: filesystem
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        heartbeat.interval: 1000
+        heartbeat.timeout: 5000
+    volumes:
+      - ./flink-jobs:/opt/flink/jobs
+      - flink-checkpoints:/tmp/flink-checkpoints
+    command: taskmanager
+
+  flink-job-deployer:
+    build:
+      context: ./flink-jobs
+    image: flink-job-deployer
+    container_name: flink-job-deployer
+    volumes:
+      - ./flink-jobs:/app
+      - maven-repo:/root/.m2
+    working_dir: /app
+    environment:
+      - KAFKA_TOPIC_NETWORK=${KAFKA_TOPIC_NETWORK}
+      - KAFKA_TOPIC_ALERTS=${KAFKA_TOPIC_ALERTS}
+    depends_on:
+      - flink-jobmanager
+      - flink-taskmanager
       - kafka-broker
-    restart: always
+    command: >
+      /bin/bash -c "
+        mvn clean package &&
+        if [ ! -f target/security-alerts-1.0.jar ]; then
+          echo 'Error: JAR file not created' && exit 1
+        fi &&
+        echo 'Waiting for JobManager to be ready...' &&
+        until curl -s flink-jobmanager:8081/overview > /dev/null 2>&1; do
+          echo 'Waiting for JobManager...'
+          sleep 2
+        done &&
+        flink run -d -m flink-jobmanager:8081 -c com.siem.SecurityAlertsJob target/security-alerts-1.0.jar
+      "
 
   superset:
     image: apache/superset
     container_name: superset
     ports:
-      - "8088:8088"
+      - $SUPERSET_PORT:8088
     depends_on:
-      - postgres
+      - sink-postgres
     environment:
-      SUPERSET_DATABASE_URI: postgresql+psycopg2://airflow:airflow@postgres:5433/siem
+      SUPERSET_DATABASE_URI: postgresql+psycopg2://$SINK_POSTGRES_USERNAME:$SINK_POSTGRES_PASSWORD@sink-postgres:5432/$SINK_POSTGRES_DB
+      SUPERSET_SECRET_KEY: $SUPERSET_SECRET_KEY
+      SUPERSET_USERNAME: $SUPERSET_USERNAME
+      SUPERSET_PASSWORD: $SUPERSET_PASSWORD
     volumes:
-      - superset_home:/app/superset_home
+      - superset-home:/app/superset_home
       - ./superset-setup:/app/superset-setup
     command: >
       /bin/bash -c "
-        cp /app/superset-setup/superset_config.py /app/pythonpath/superset_config.py && 
-        chmod +x /app/superset-setup/init_superset.sh && 
+        pip install psycopg2-binary &&
+        cp /app/superset-setup/superset_config.py /app/pythonpath/superset_config.py &&
+        chmod +x /app/superset-setup/init_superset.sh &&
         /app/superset-setup/init_superset.sh
       "
 
 volumes:
-  pgdata:
-  superset_home:
+  airflow-pg-data:
+  airflow-redis-data:
+  sink-pg-data:
+  superset-home:
+  flink-checkpoints:
+  maven-repo:

@@ -2,14 +2,20 @@
     "name": "postgres-alerts-sink",
     "config": {
       "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
-      "connection.url": "jdbc:postgresql://postgres:5433/siem?user=airflow&password=airflow",
+      "connection.url": "jdbc:postgresql://sink-postgres:5432/siem?user=airflow&password=airflow",
       "topics": "alerts.security",
       "insert.mode": "insert",
       "auto.create": "true",
       "auto.evolve": "true",
+      "pk.mode": "record_value",
+      "pk.fields": "alert_id",
       "key.converter": "org.apache.kafka.connect.storage.StringConverter",
       "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-      "value.converter.schemas.enable": "false"
+      "value.converter.schemas.enable": "true",
+      "table.name.format": "alerts_security",
+      "transforms": "SetSchema",
+      "transforms.SetSchema.type": "org.apache.kafka.connect.transforms.RegexRouter",
+      "transforms.SetSchema.regex": ".*",
+      "transforms.SetSchema.replacement": "public.$0"
     }
-  }
-  
+}
