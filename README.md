@@ -31,23 +31,23 @@ A fully automated real-time SIEM (Security Information & Event Management) stack
 
 ```
 .
-├── airflow-dags/                                        # Airflow DAGs for network event generation
-├── flink-jobs/                                          # Flink streaming jobs for anomaly detection
-│   ├── src/                                             # Java source code
+├── airflow-dags/                          # Airflow DAGs for network event generation
+├── flink-jobs/                            # Flink streaming jobs for anomaly detection
+│   ├── src/                               # Java source code
 │   │   └── main/java/com/siem/
 │   │       ├── model/
-│   │       │     └── NetworkEvent.java                  # Network Event Data model
-│   │       └── SecurityAlertsJob.java                   # Brute Force Detection Flink Job
-│   ├── pom.xml                                          # Maven project configuration
-│   └── DockerFile                                       # Dockerfile for job deployer
-├── kafka-connect-setup/                                 # Kafka Connect configuration
-│   └── postgres-sink.json                               # PostgreSQL sink connector config
-├── superset-setup/                                      # Superset initialization
-│   ├── dashboards/                                      # Pre-configured dashboards
-│   ├── init_superset.sh                                 # Initialization script
-│   └── superset_config.py                               # Superset configuration
-├── .env                                                 # Environment variables
-└── docker-compose.yml                                   # Container orchestration
+│   │       │     └── NetworkEvent.java    # Network Event Data model
+│   │       └── SecurityAlertsJob.java     # Brute Force Detection Flink Job
+│   ├── pom.xml                            # Maven project configuration
+│   └── DockerFile                         # Dockerfile for job deployer
+├── kafka-connect-setup/                   # Kafka Connect configuration
+│   └── postgres-sink.json                 # PostgreSQL sink connector config
+├── superset-setup/                        # Superset initialization
+│   ├── dashboards/                        # Pre-configured dashboards
+│   ├── init_superset.sh                   # Initialization script
+│   └── superset_config.py                 # Superset configuration
+├── .env                                   # Environment variables
+└── docker-compose.yml                     # Container orchestration
 ```
 
 ---
