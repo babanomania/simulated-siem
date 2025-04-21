@@ -126,7 +126,7 @@ A fully automated real-time SIEM (Security Information & Event Management) stack
 ![SIEM Alerts Dashboard](./docs/dashboard.png)
 
 Superset will automatically include:
-- 📈 Time-series chart of alerts per hour
+- 📈 Time-series chart of alerts on per ip basis
 - 🔍 Queryable `alerts_security` dataset
 
 ---
